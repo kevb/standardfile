@@ -128,6 +128,11 @@ func (h *files) ValetTokens(c *echo.Context) error {
 	}
 
 	return c.JSON(http.StatusOK, map[string]any{
+		"meta": map[string]any{
+			"server": map[string]any{
+				"filesServerUrl": h.config.PublicURL,
+			},
+		},
 		"success":    true,
 		"valetToken": valetToken,
 	})

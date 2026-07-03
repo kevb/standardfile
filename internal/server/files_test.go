@@ -64,6 +64,25 @@ func TestFilesValetTokenValidation(t *testing.T) {
 	assert.JSONEq(t, `{"success":false,"reason":"invalid-parameters"}`, resp.Body.String())
 }
 
+func TestFilesValetTokenResponseIncludesFilesServerURL(t *testing.T) {
+	engine, ctrl, _, cleanup := setupFiles(t)
+	defer cleanup()
+
+	_, session := createUserWithSession(ctrl)
+	fileID := uuid.Must(uuid.NewV4()).String()
+	resp := request(engine, http.MethodPost, "/v1/files/valet-tokens", []byte(`{"operation":"write","resources":[{"remoteIdentifier":"`+fileID+`","unencryptedFileSize":42}]}`), map[string]string{
+		"Authorization": "Bearer " + accessToken(ctrl, session),
+		"Content-Type":  "application/json",
+	})
+	require.Equal(t, http.StatusOK, resp.Code, resp.Body.String())
+
+	v, err := fastjson.Parse(resp.Body.String())
+	require.NoError(t, err)
+	assert.True(t, v.Get("success").GetBool())
+	assert.NotEmpty(t, string(v.Get("valetToken").GetStringBytes()))
+	assert.Equal(t, "http://localhost:5000", string(v.Get("meta", "server", "filesServerUrl").GetStringBytes()))
+}
+
 func TestFilesLifecycle(t *testing.T) {
 	engine, ctrl, filesPath, cleanup := setupFiles(t)
 	defer cleanup()
