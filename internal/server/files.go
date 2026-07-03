@@ -77,6 +77,7 @@ func newFiles(config FilesConfig, secret []byte) *files {
 func (h *files) ValetTokens(c *echo.Context) error {
 	var params fileValetTokenRequest
 	if err := c.Bind(&params); err != nil {
+		log.Printf("File valet token request rejected: invalid body method=%s uri=%s host=%s", c.Request().Method, c.Request().RequestURI, c.Request().Host)
 		return c.JSON(http.StatusBadRequest, map[string]any{
 			"success": false,
 			"reason":  "invalid-parameters",
@@ -84,6 +85,7 @@ func (h *files) ValetTokens(c *echo.Context) error {
 	}
 
 	if len(params.Resources) != 1 || !isFileOperation(params.Operation) {
+		log.Printf("File valet token request rejected: invalid parameters operation=%q resources=%d method=%s uri=%s host=%s", params.Operation, len(params.Resources), c.Request().Method, c.Request().RequestURI, c.Request().Host)
 		return c.JSON(http.StatusBadRequest, map[string]any{
 			"success": false,
 			"reason":  "invalid-parameters",
@@ -92,6 +94,7 @@ func (h *files) ValetTokens(c *echo.Context) error {
 
 	resource := params.Resources[0]
 	if _, err := uuid.FromString(resource.RemoteIdentifier); err != nil {
+		log.Printf("File valet token request rejected: invalid remoteIdentifier=%q operation=%q method=%s uri=%s host=%s", resource.RemoteIdentifier, params.Operation, c.Request().Method, c.Request().RequestURI, c.Request().Host)
 		return c.JSON(http.StatusBadRequest, map[string]any{
 			"success": false,
 			"reason":  "invalid-parameters",
@@ -100,6 +103,7 @@ func (h *files) ValetTokens(c *echo.Context) error {
 
 	user := currentUser(c)
 	if user == nil {
+		log.Printf("File valet token request rejected: missing session operation=%q remoteIdentifier=%q method=%s uri=%s host=%s", params.Operation, resource.RemoteIdentifier, c.Request().Method, c.Request().RequestURI, c.Request().Host)
 		return c.JSON(http.StatusUnauthorized, map[string]any{
 			"error": map[string]any{
 				"tag":     "invalid-auth",
@@ -127,6 +131,8 @@ func (h *files) ValetTokens(c *echo.Context) error {
 		return err
 	}
 
+	log.Printf("File valet token issued: user=%s operation=%s remoteIdentifier=%s unencryptedFileSize=%d filesServerUrl=%s ttl=%s", user.ID, params.Operation, resource.RemoteIdentifier, resource.UnencryptedFileSize, h.config.PublicURL, h.config.ValetTokenTTL)
+
 	return c.JSON(http.StatusOK, map[string]any{
 		"meta": map[string]any{
 			"server": map[string]any{
@@ -139,10 +145,12 @@ func (h *files) ValetTokens(c *echo.Context) error {
 }
 
 func (h *files) CreateUploadSession(c *echo.Context) error {
+	logFileRequest(c, fileOperationWrite, true)
 	claims, err := h.readValetToken(c, fileOperationWrite, true)
 	if err != nil {
 		return fileAuthError(c, err)
 	}
+	logFileClaims(c, claims)
 
 	root, err := h.openRoot()
 	if err != nil {
@@ -161,10 +169,12 @@ func (h *files) CreateUploadSession(c *echo.Context) error {
 }
 
 func (h *files) UploadChunk(c *echo.Context) error {
+	logFileRequest(c, fileOperationWrite, false)
 	claims, err := h.readValetToken(c, fileOperationWrite, false)
 	if err != nil {
 		return fileAuthError(c, err)
 	}
+	logFileClaims(c, claims)
 
 	chunkID, err := parsePositiveInt(c.Request().Header.Get("x-chunk-id"))
 	if err != nil {
@@ -214,10 +224,12 @@ func (h *files) UploadChunk(c *echo.Context) error {
 }
 
 func (h *files) CloseUploadSession(c *echo.Context) error {
+	logFileRequest(c, fileOperationWrite, true)
 	claims, err := h.readValetToken(c, fileOperationWrite, true)
 	if err != nil {
 		return fileAuthError(c, err)
 	}
+	logFileClaims(c, claims)
 
 	root, err := h.openRoot()
 	if err != nil {
@@ -308,10 +320,12 @@ func (h *files) CloseUploadSession(c *echo.Context) error {
 }
 
 func (h *files) Download(c *echo.Context) error {
+	logFileRequest(c, fileOperationRead, false)
 	claims, err := h.readValetToken(c, fileOperationRead, false)
 	if err != nil {
 		return fileAuthError(c, err)
 	}
+	logFileClaims(c, claims)
 
 	chunkSize, err := parsePositiveInt64(c.Request().Header.Get("x-chunk-size"))
 	if err != nil {
@@ -367,10 +381,12 @@ func (h *files) Download(c *echo.Context) error {
 }
 
 func (h *files) Delete(c *echo.Context) error {
+	logFileRequest(c, fileOperationDelete, true)
 	claims, err := h.readValetToken(c, fileOperationDelete, true)
 	if err != nil {
 		return fileAuthError(c, err)
 	}
+	logFileClaims(c, claims)
 
 	root, err := h.openRoot()
 	if err != nil {
@@ -389,21 +405,21 @@ func (h *files) Delete(c *echo.Context) error {
 }
 
 func (h *files) readValetToken(c *echo.Context, operation string, allowBody bool) (*fileValetClaims, error) {
-	raw := h.valetTokenFromRequest(c, allowBody)
+	raw, source := h.valetTokenFromRequest(c, allowBody)
 	if raw == "" {
-		return nil, errors.New("missing valet token")
+		return nil, fmt.Errorf("missing valet token source=%s", source)
 	}
 
 	var token paseto.JSONToken
 	if err := paseto.Decrypt(raw, h.secret, &token, nil); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("decrypt failed source=%s: %w", source, err)
 	}
 	if err := token.Validate(
 		paseto.IssuedBy("standardfile"),
 		paseto.ForAudience(fileValetAudience),
 		paseto.ValidAt(time.Now()),
 	); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("validation failed source=%s: %w", source, err)
 	}
 
 	var remoteIdentifier string
@@ -418,13 +434,13 @@ func (h *files) readValetToken(c *echo.Context, operation string, allowBody bool
 	_ = token.Get("unencryptedFileSize", &unencryptedFileSize)
 
 	if tokenOperation != operation {
-		return nil, errors.New("operation not permitted")
+		return nil, fmt.Errorf("operation not permitted source=%s tokenOperation=%s requestedOperation=%s", source, tokenOperation, operation)
 	}
 	if _, err := uuid.FromString(token.Subject); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("invalid user subject source=%s: %w", source, err)
 	}
 	if _, err := uuid.FromString(remoteIdentifier); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("invalid remoteIdentifier source=%s: %w", source, err)
 	}
 
 	return &fileValetClaims{
@@ -435,24 +451,27 @@ func (h *files) readValetToken(c *echo.Context, operation string, allowBody bool
 	}, nil
 }
 
-func (h *files) valetTokenFromRequest(c *echo.Context, allowBody bool) string {
+func (h *files) valetTokenFromRequest(c *echo.Context, allowBody bool) (string, string) {
 	if token := c.Request().Header.Get("x-valet-token"); token != "" {
-		return token
+		return token, "header"
 	}
 	if token := c.QueryParam("valetToken"); token != "" {
-		return token
+		return token, "query"
 	}
 	if !allowBody {
-		return ""
+		return "", "missing"
 	}
 
 	var params struct {
 		ValetToken string `json:"valetToken" form:"valetToken"`
 	}
 	if err := c.Bind(&params); err != nil {
-		return ""
+		return "", "body-bind-error"
 	}
-	return params.ValetToken
+	if params.ValetToken == "" {
+		return "", "missing"
+	}
+	return params.ValetToken, "body"
 }
 
 func (h *files) openRoot() (*os.Root, error) {
@@ -547,8 +566,47 @@ func parseRangeStart(value string) (int64, error) {
 	return strconv.ParseInt(strings.TrimSuffix(strings.TrimPrefix(value, "bytes="), "-"), 10, 64)
 }
 
+func logFileRequest(c *echo.Context, operation string, allowBodyToken bool) {
+	r := c.Request()
+	tokenSource := "missing"
+	switch {
+	case r.Header.Get("x-valet-token") != "":
+		tokenSource = "header"
+	case c.QueryParam("valetToken") != "":
+		tokenSource = "query"
+	case allowBodyToken:
+		tokenSource = "body-or-missing"
+	}
+	log.Printf(
+		"File request received: operation=%s method=%s uri=%s host=%s remote=%s token_source=%s chunk_id=%q chunk_size=%q range=%q content_length=%d content_type=%q",
+		operation,
+		r.Method,
+		r.RequestURI,
+		r.Host,
+		r.RemoteAddr,
+		tokenSource,
+		r.Header.Get("x-chunk-id"),
+		r.Header.Get("x-chunk-size"),
+		r.Header.Get("Range"),
+		r.ContentLength,
+		r.Header.Get(echo.HeaderContentType),
+	)
+}
+
+func logFileClaims(c *echo.Context, claims *fileValetClaims) {
+	log.Printf(
+		"File valet token accepted: method=%s uri=%s user=%s operation=%s remoteIdentifier=%s unencryptedFileSize=%d",
+		c.Request().Method,
+		c.Request().RequestURI,
+		claims.UserID,
+		claims.Operation,
+		claims.RemoteIdentifier,
+		claims.UnencryptedFileSize,
+	)
+}
+
 func fileAuthError(c *echo.Context, err error) error {
-	log.Printf("Invalid file valet token: %s", err)
+	log.Printf("Invalid file valet token: method=%s uri=%s host=%s remote=%s reason=%s", c.Request().Method, c.Request().RequestURI, c.Request().Host, c.Request().RemoteAddr, err)
 	return c.JSON(http.StatusBadRequest, map[string]any{
 		"error": map[string]any{
 			"tag":     "invalid-parameters",
