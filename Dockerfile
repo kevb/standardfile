@@ -24,7 +24,7 @@ RUN go build \
 # final stage
 FROM alpine:3
 
-ENV DATABASE_PATH /data/database
+ENV DATABASE_PATH=/data/database
 
 RUN apk add --update --no-cache ca-certificates && \
   mkdir -p ${DATABASE_PATH}
