@@ -197,7 +197,7 @@ func EchoEngine(ctrl Controller) *echo.Echo {
 	//
 	// subscription handlers
 	//
-	if len(ctrl.SubscriptionPayload) != 0 {
+	if len(ctrl.SubscriptionPayload) != 0 || ctrl.Files.Enabled {
 		subscription := &subscription{
 			SubscriptionPayload: ctrl.SubscriptionPayload,
 			FeaturesPayload:     ctrl.FeaturesPayload,

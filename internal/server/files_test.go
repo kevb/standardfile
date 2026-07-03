@@ -125,7 +125,7 @@ func TestFilesLifecycle(t *testing.T) {
 		"x-chunk-size":  "5",
 		"Range":         "bytes=0-",
 	})
-	assert.Equal(t, http.StatusUnauthorized, resp.Code)
+	assert.Equal(t, http.StatusBadRequest, resp.Code)
 
 	deleteToken := valetToken(t, engine, auth, "delete", fileID, 0)
 	resp = request(engine, http.MethodDelete, "/v1/files", nil, map[string]string{
@@ -140,6 +140,32 @@ func TestFilesLifecycle(t *testing.T) {
 		"Range":         "bytes=0-",
 	})
 	assert.Equal(t, http.StatusBadRequest, resp.Code)
+}
+
+func TestFilesAcceptValetTokenQueryAndBody(t *testing.T) {
+	engine, ctrl, _, cleanup := setupFiles(t)
+	defer cleanup()
+
+	_, session := createUserWithSession(ctrl)
+	auth := "Bearer " + accessToken(ctrl, session)
+	fileID := uuid.Must(uuid.NewV4()).String()
+	writeToken := valetToken(t, engine, auth, "write", fileID, 4)
+
+	resp := request(engine, http.MethodPost, "/v1/files/upload/create-session?valetToken="+writeToken, nil, nil)
+	assert.Equal(t, http.StatusOK, resp.Code)
+
+	resp = request(engine, http.MethodPost, "/v1/files/upload/close-session", []byte(`{"valetToken":"`+writeToken+`"}`), map[string]string{
+		"Content-Type": "application/json",
+	})
+	assert.Equal(t, http.StatusBadRequest, resp.Code)
+	assert.Contains(t, resp.Body.String(), "no chunks")
+
+	resp = request(engine, http.MethodPost, "/v1/files/upload/chunk", []byte(`{"valetToken":"`+writeToken+`"}`), map[string]string{
+		"Content-Type": "application/json",
+		"x-chunk-id":   "1",
+	})
+	assert.Equal(t, http.StatusBadRequest, resp.Code)
+	assert.Contains(t, resp.Body.String(), "Invalid valet token")
 }
 
 func TestFilesCrossUserIsolation(t *testing.T) {
@@ -214,6 +240,24 @@ func TestFilesURLDiscovery(t *testing.T) {
 	v, err := fastjson.Parse(resp.Body.String())
 	require.NoError(t, err)
 	assert.Equal(t, "http://localhost:5000", string(v.Get("meta", "server", "filesServerUrl").GetStringBytes()))
+}
+
+func TestFilesURLDiscoveryWithoutSubscriptionPayload(t *testing.T) {
+	engine, ctrl, _, cleanup := setupFiles(t)
+	defer cleanup()
+
+	user, session := createUserWithSession(ctrl)
+	resp := request(engine, http.MethodGet, "/v1/users/"+user.ID+"/subscription", nil, map[string]string{
+		"Authorization": "Bearer " + accessToken(ctrl, session),
+	})
+	assert.Equal(t, http.StatusOK, resp.Code)
+
+	v, err := fastjson.Parse(resp.Body.String())
+	require.NoError(t, err)
+	assert.Equal(t, user.ID, string(v.Get("meta", "auth", "userUuid").GetStringBytes()))
+	assert.Equal(t, "http://localhost:5000", string(v.Get("meta", "server", "filesServerUrl").GetStringBytes()))
+	assert.Equal(t, user.ID, string(v.Get("data", "user", "uuid").GetStringBytes()))
+	assert.Equal(t, user.Email, string(v.Get("data", "user", "email").GetStringBytes()))
 }
 
 func setupFiles(t *testing.T) (engine *echo.Echo, ctrl server.Controller, filesPath string, cleanup func()) {

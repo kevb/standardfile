@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log"
 	"net/http"
 	"os"
 	"path"
@@ -133,7 +134,7 @@ func (h *files) ValetTokens(c *echo.Context) error {
 }
 
 func (h *files) CreateUploadSession(c *echo.Context) error {
-	claims, err := h.readValetToken(c, fileOperationWrite)
+	claims, err := h.readValetToken(c, fileOperationWrite, true)
 	if err != nil {
 		return fileAuthError(c, err)
 	}
@@ -155,7 +156,7 @@ func (h *files) CreateUploadSession(c *echo.Context) error {
 }
 
 func (h *files) UploadChunk(c *echo.Context) error {
-	claims, err := h.readValetToken(c, fileOperationWrite)
+	claims, err := h.readValetToken(c, fileOperationWrite, false)
 	if err != nil {
 		return fileAuthError(c, err)
 	}
@@ -208,7 +209,7 @@ func (h *files) UploadChunk(c *echo.Context) error {
 }
 
 func (h *files) CloseUploadSession(c *echo.Context) error {
-	claims, err := h.readValetToken(c, fileOperationWrite)
+	claims, err := h.readValetToken(c, fileOperationWrite, true)
 	if err != nil {
 		return fileAuthError(c, err)
 	}
@@ -302,7 +303,7 @@ func (h *files) CloseUploadSession(c *echo.Context) error {
 }
 
 func (h *files) Download(c *echo.Context) error {
-	claims, err := h.readValetToken(c, fileOperationRead)
+	claims, err := h.readValetToken(c, fileOperationRead, false)
 	if err != nil {
 		return fileAuthError(c, err)
 	}
@@ -361,7 +362,7 @@ func (h *files) Download(c *echo.Context) error {
 }
 
 func (h *files) Delete(c *echo.Context) error {
-	claims, err := h.readValetToken(c, fileOperationDelete)
+	claims, err := h.readValetToken(c, fileOperationDelete, true)
 	if err != nil {
 		return fileAuthError(c, err)
 	}
@@ -382,8 +383,8 @@ func (h *files) Delete(c *echo.Context) error {
 	})
 }
 
-func (h *files) readValetToken(c *echo.Context, operation string) (*fileValetClaims, error) {
-	raw := c.Request().Header.Get("x-valet-token")
+func (h *files) readValetToken(c *echo.Context, operation string, allowBody bool) (*fileValetClaims, error) {
+	raw := h.valetTokenFromRequest(c, allowBody)
 	if raw == "" {
 		return nil, errors.New("missing valet token")
 	}
@@ -427,6 +428,26 @@ func (h *files) readValetToken(c *echo.Context, operation string) (*fileValetCla
 		Operation:           tokenOperation,
 		UnencryptedFileSize: unencryptedFileSize,
 	}, nil
+}
+
+func (h *files) valetTokenFromRequest(c *echo.Context, allowBody bool) string {
+	if token := c.Request().Header.Get("x-valet-token"); token != "" {
+		return token
+	}
+	if token := c.QueryParam("valetToken"); token != "" {
+		return token
+	}
+	if !allowBody {
+		return ""
+	}
+
+	var params struct {
+		ValetToken string `json:"valetToken" form:"valetToken"`
+	}
+	if err := c.Bind(&params); err != nil {
+		return ""
+	}
+	return params.ValetToken
 }
 
 func (h *files) openRoot() (*os.Root, error) {
@@ -521,10 +542,11 @@ func parseRangeStart(value string) (int64, error) {
 	return strconv.ParseInt(strings.TrimSuffix(strings.TrimPrefix(value, "bytes="), "-"), 10, 64)
 }
 
-func fileAuthError(c *echo.Context, _ error) error {
-	return c.JSON(http.StatusUnauthorized, map[string]any{
+func fileAuthError(c *echo.Context, err error) error {
+	log.Printf("Invalid file valet token: %s", err)
+	return c.JSON(http.StatusBadRequest, map[string]any{
 		"error": map[string]any{
-			"tag":     "invalid-auth",
+			"tag":     "invalid-parameters",
 			"message": "Invalid valet token.",
 		},
 	})
