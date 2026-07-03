@@ -34,6 +34,16 @@ session:
   access_token_ttl: 1440h # 60 days expressed in Golang's time.Duration format
   refresh_token_ttl: 8760h # 1 year
 
+files:
+  enabled: false
+  path: uploads
+  # Public URL used by Standard Notes clients to access the files endpoints.
+  public_url: ""
+  valet_token_ttl: 30m
+  max_chunk_bytes: 100000000
+  # -1 means unlimited.
+  quota_bytes: -1
+
 # This option enables paid features in the official StandardNotes client.
 # This option is enabled by providing the JSON's filename containg
 # the official JSON data returned by `GET /v1/users/:id/subscription'.

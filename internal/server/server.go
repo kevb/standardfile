@@ -25,6 +25,7 @@ type Controller struct {
 	FeaturesPayload     []byte
 	AllowOrigins        []string
 	AllowMethods        []string
+	Files               FilesConfig
 	// JWT params
 	SigningKey []byte
 	// Session params
@@ -43,6 +44,22 @@ func EchoEngine(ctrl Controller) *echo.Echo {
 		AllowCredentials: true,
 		AllowOrigins:     ctrl.AllowOrigins,
 		AllowMethods:     ctrl.AllowMethods,
+		AllowHeaders: []string{
+			echo.HeaderAccept,
+			echo.HeaderAuthorization,
+			echo.HeaderContentType,
+			echo.HeaderOrigin,
+			"Range",
+			"X-Chunk-Id",
+			"X-Chunk-Size",
+			"X-Valet-Token",
+			"X-Application-Version",
+			"X-SNJS-Version",
+		},
+		ExposeHeaders: []string{
+			"Accept-Ranges",
+			"Content-Range",
+		},
 	}))
 	engine.Use(middleware.Gzip())
 
@@ -165,12 +182,26 @@ func EchoEngine(ctrl Controller) *echo.Echo {
 	// v2restricted := restricted.Group("/v2")
 
 	//
+	// files
+	//
+	if ctrl.Files.Enabled {
+		files := newFiles(ctrl.Files, ctrl.SessionSecret)
+		v1restricted.POST("/files/valet-tokens", files.ValetTokens)
+		v1.POST("/files/upload/create-session", files.CreateUploadSession)
+		v1.POST("/files/upload/chunk", files.UploadChunk)
+		v1.POST("/files/upload/close-session", files.CloseUploadSession)
+		v1.GET("/files", files.Download)
+		v1.DELETE("/files", files.Delete)
+	}
+
+	//
 	// subscription handlers
 	//
 	if len(ctrl.SubscriptionPayload) != 0 {
 		subscription := &subscription{
 			SubscriptionPayload: ctrl.SubscriptionPayload,
 			FeaturesPayload:     ctrl.FeaturesPayload,
+			FilesServerURL:      ctrl.Files.PublicURL,
 		}
 		router.GET("/v2/subscriptions", func(c *echo.Context) error {
 			return c.HTML(http.StatusInternalServerError, "getaddrinfo EAI_AGAIN payments")
