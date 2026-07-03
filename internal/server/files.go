@@ -456,7 +456,7 @@ func (h *files) checkQuota(root *os.Root, claims *fileValetClaims, newSize int64
 		return err
 	}
 	if usage+newSize > h.config.QuotaBytes {
-		return errors.New("File upload quota exceeded.")
+		return errors.New("file upload quota exceeded")
 	}
 	return nil
 }
