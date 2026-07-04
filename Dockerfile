@@ -1,10 +1,12 @@
 # build stage
-FROM golang:1.26-alpine AS build-env
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS build-env
 
 RUN apk add --update --no-cache ca-certificates git
 
 WORKDIR /src
 
+ARG TARGETOS
+ARG TARGETARCH
 ARG VERSION=dev
 ARG REVISION=none
 ARG DATE=unknown
@@ -17,7 +19,7 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
-RUN go build \
+RUN GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
   -ldflags "-s -w -X main.version=${VERSION} -X main.revision=${REVISION} -X main.date=${DATE}" \
   -o /dist/standardfile ./cmd/standardfile
 
