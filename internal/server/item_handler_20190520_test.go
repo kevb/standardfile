@@ -13,6 +13,7 @@ import (
 	"github.com/mdouchement/standardfile/internal/server/service"
 	"github.com/mdouchement/standardfile/pkg/libsf"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 type sync20190520 struct {
@@ -151,4 +152,69 @@ func TestRequestItemsSync20190520(t *testing.T) {
 		assert.Empty(t, v.Saved)
 		assert.Empty(t, v.Conflicts)
 	})
+}
+
+func TestRequestItemsSync20190520DuplicateDeleteIsIdempotent(t *testing.T) {
+	engine, ctrl, r, cleanup := setup()
+	defer cleanup()
+
+	user := createUser(ctrl)
+	header := gofight.H{
+		"Authorization": "Bearer " + server.CreateJWT(ctrl, user),
+	}
+
+	itemID := "9d02f329-7a9c-4e50-8285-c34fe67bc3d6"
+	deletedItem := &model.Item{
+		Base: model.Base{
+			ID: itemID,
+		},
+		UserID:           user.ID,
+		Content:          "",
+		ContentType:      "SN|Clipboard",
+		EncryptedItemKey: "",
+		Deleted:          true,
+	}
+	require.NoError(t, ctrl.Database.Save(deletedItem))
+
+	serverItem, err := ctrl.Database.FindItemByUserID(itemID, user.ID)
+	require.NoError(t, err)
+	serverUpdatedAt := *serverItem.UpdatedAt
+
+	staleUpdatedAt := serverUpdatedAt.Add(-1 * time.Hour)
+	incomingItem := *serverItem
+	incomingItem.UpdatedAt = &staleUpdatedAt
+	incomingItem.Content = "stale encrypted clipboard payload"
+	incomingItem.EncryptedItemKey = "stale encrypted item key"
+
+	params := gofight.D{
+		"api":               "20190520",
+		"compute_integrity": false,
+		"limit":             100000,
+		"sync_token":        libsf.TokenFromTime(serverUpdatedAt.Add(-1 * time.Hour)),
+		"cursor_token":      "",
+		"items":             []*model.Item{&incomingItem},
+	}
+
+	r.POST("/items/sync").SetHeader(header).SetJSON(params).Run(engine, func(r gofight.HTTPResponse, rq gofight.HTTPRequest) {
+		assert.Equal(t, http.StatusOK, r.Code)
+
+		var v sync20190520
+		err := json.Unmarshal(r.Body.Bytes(), &v)
+		require.NoError(t, err)
+
+		require.Len(t, v.Saved, 1)
+		assert.Empty(t, v.Retrieved)
+		assert.Empty(t, v.Conflicts)
+		assert.Equal(t, itemID, v.Saved[0].ID)
+		assert.True(t, v.Saved[0].Deleted)
+		assert.Empty(t, v.Saved[0].Content)
+		assert.Empty(t, v.Saved[0].EncryptedItemKey)
+	})
+
+	persistedItem, err := ctrl.Database.FindItemByUserID(itemID, user.ID)
+	require.NoError(t, err)
+	assert.True(t, persistedItem.UpdatedAt.Equal(serverUpdatedAt))
+	assert.True(t, persistedItem.Deleted)
+	assert.Empty(t, persistedItem.Content)
+	assert.Empty(t, persistedItem.EncryptedItemKey)
 }

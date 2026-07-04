@@ -119,6 +119,13 @@ func (s *syncService20190520) save() (saved []*model.Item, conflicts []*Conflict
 		}
 
 		if !newRecord {
+			if incomingItem.Deleted && serverItem.Deleted {
+				s.Base.prepareDelete(serverItem)
+				saved = append(saved, serverItem)
+				tobedeleted[serverItem.GetID()] = true
+				continue
+			}
+
 			// We want to check if the incoming updated_at value is equal to the item's current updated_at value.
 			// If they differ, it means the client is attempting to save an item which doesn't have the correct server value.
 			// We conflict if the difference in dates is greater than the 1 unit of precision (MIN_CONFLICT_INTERVAL_MICROSECONDS)
