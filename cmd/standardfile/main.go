@@ -185,6 +185,32 @@ var (
 				}
 			}
 
+			files := server.FilesConfig{
+				Enabled:       konf.Bool("files.enabled"),
+				Path:          konf.String("files.path"),
+				PublicURL:     konf.String("files.public_url"),
+				ValetTokenTTL: konf.Duration("files.valet_token_ttl"),
+				MaxChunkBytes: konf.Int64("files.max_chunk_bytes"),
+				QuotaBytes:    -1,
+			}
+			if konf.Exists("files.quota_bytes") {
+				files.QuotaBytes = konf.Int64("files.quota_bytes")
+			}
+			if files.Path == "" {
+				files.Path = "uploads"
+			}
+			if files.MaxChunkBytes == 0 {
+				files.MaxChunkBytes = 100000000
+			}
+			if files.Enabled {
+				if files.PublicURL == "" {
+					return errors.New("files.public_url is required when files.enabled is true")
+				}
+				if err := os.MkdirAll(files.Path, 0700); err != nil {
+					return errors.Wrap(err, "could not create files.path")
+				}
+			}
+
 			engine := server.EchoEngine(server.Controller{
 				Version:                    version,
 				Database:                   db,
@@ -194,6 +220,7 @@ var (
 				FeaturesPayload:            features,
 				AllowOrigins:               konf.MustStrings("cors.allow_origins"),
 				AllowMethods:               konf.MustStrings("cors.allow_methods"),
+				Files:                      files,
 				SigningKey:                 configSecretKey,
 				SessionSecret:              kdf(32, configSessionSecret),
 				AccessTokenExpirationTime:  konf.MustDuration("session.access_token_ttl"),
